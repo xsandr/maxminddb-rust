@@ -1,0 +1,4 @@
+[submodule "test_data"]
+	path = test_data
+	url = https://github.com/maxmind/MaxMind-DB
+	branch = master
