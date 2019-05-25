@@ -8,7 +8,6 @@ pub struct Metadata {
     pub node_count: u64,
     pub record_size: u64,
     pub ip_version: u64,
-    pub metadata_start: usize,
 }
 
 // metadata section delimiter - xABxCDxEFMaxMind.com
@@ -58,7 +57,11 @@ impl<'a> Decoder<'a> {
 
     fn decode_ctrl_byte(&mut self) -> (Type, usize) {
         let byte = self.current_byte();
-        let data_type = match byte >> 5 {
+        let mut type_bits = byte >> 5;
+        if type_bits == 0 {
+            type_bits = 7 + self.current_byte();
+        }
+        let data_type = match type_bits {
             1 => Type::Pointer,
             2 => Type::String,
             3 => Type::Double,
@@ -66,27 +69,66 @@ impl<'a> Decoder<'a> {
             5 => Type::Uint16,
             6 => Type::Uint32,
             7 => Type::Map,
-            _ => panic!(""),
+            8 => Type::Int32,
+            9 => Type::Uint64,
+            10 => Type::Uint128,
+            11 => Type::Array,
+            12 => Type::Container,
+            13 => Type::EndMarker,
+            14 => Type::Boolean,
+            15 => Type::Float,
+            _ => panic!("Unknown type"),
         };
-        let size = (byte & 0x1F) as usize;
+        let mut size = (byte & 0x1F) as usize;
+        if size >= 29 {
+            if size == 29 {
+                size = 29 + self.decode_n_bytes_as_uint(1) as usize; // TODO extract it to the separate method
+            } else if size == 30 {
+                size = 285 + self.decode_n_bytes_as_uint(2) as usize;
+            } else if size == 31 {
+                size = 65821 + self.decode_n_bytes_as_uint(3) as usize;
+            }
+        }
         (data_type, size)
+    }
+
+    fn decode_n_bytes_as_uint(&mut self, n: usize) -> u64 {
+        self.next_bytes(n)
+            .iter()
+            .fold(0u64, |acc, &x| (acc << 8) | u64::from(x))
     }
 
     fn decode_uint(&mut self) -> u64 {
         let (_, size) = self.decode_ctrl_byte();
-        self.next_bytes(size)
-            .as_ref()
-            .iter()
-            .fold(0u64, |acc, &b| (acc << 8) | u64::from(b))
+        self.decode_n_bytes_as_uint(size)
     }
 
     fn skip_value(&mut self) {
         let (data_type, size) = self.decode_ctrl_byte();
         match data_type {
-            Type::String | Type::Double | Type::Bytes | Type::Uint16 | Type::Uint32 => {
-                self.move_caret(size)
+            Type::Pointer
+            | Type::String
+            | Type::Double
+            | Type::Bytes
+            | Type::Int32
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Uint128 => {
+                self.move_caret(size);
             }
-            _ => {}
+            Type::Array => {
+                for _ in 0..size {
+                    self.skip_value();
+                }
+            }
+            Type::Map => {
+                for _ in 0..size {
+                    self.skip_value();
+                    self.skip_value();
+                }
+            }
+            _ => panic!("Couldn't skip unknown datatype"),
         }
     }
 
@@ -127,7 +169,6 @@ impl Metadata {
             node_count: hm["node_count"],
             record_size: hm["record_size"],
             ip_version: hm["ip_version"],
-            metadata_start: index,
         }
     }
 
@@ -173,8 +214,8 @@ mod tests {
     #[test]
     fn metadata_parsing() {
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+        assert_eq!(reader.metadata.node_count, 1431);
         assert_eq!(reader.metadata.ip_version, 6);
         assert_eq!(reader.metadata.record_size, 28);
-        assert_eq!(reader.metadata.metadata_start, 20560);
     }
 }
