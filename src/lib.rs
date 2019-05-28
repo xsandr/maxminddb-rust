@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io;
+use std::net::IpAddr;
 use std::path::Path;
 use std::str::from_utf8;
 
@@ -206,16 +207,95 @@ impl Reader {
             buffer,
         })
     }
+
+    fn ip_to_bitmask(ip_address: IpAddr) -> (u32, usize) {
+        let closure = |acc, &x| (acc << 8) | u32::from(x);
+        let (bitmask, size) = match ip_address {
+            IpAddr::V4(ip) => (ip.octets().iter().fold(0, closure), 32),
+            IpAddr::V6(ip) => (ip.octets().iter().fold(0, closure), 128),
+        };
+        (bitmask, size)
+    }
+
+    fn find_ip_offset(&self, ip: IpAddr) -> u64 {
+        let closure = |acc, &x| (acc << 8) | u64::from(x);
+        let node_size_in_bytes = (self.metadata.record_size / 4) as usize;
+
+        let (bitmask, size) = Reader::ip_to_bitmask(ip);
+        let mut offset = match ip {
+            IpAddr::V4(_) => 96 * node_size_in_bytes,
+            IpAddr::V6(_) => 0,
+        };
+
+        let mut i = size - 1;
+        while i >= 0 {
+            let is_left = (bitmask >> i) & 1 == 0;
+            let node = &self.buffer[offset..offset + node_size_in_bytes];
+
+            // TODO let's make record_size enum
+            let calculated_value = match self.metadata.record_size {
+                28 => {
+                    let middle_byte = self.buffer[offset + 3] as u64;
+                    match is_left {
+                        true => node[..3].iter().fold(middle_byte, closure),
+                        false => node[4..].iter().fold(middle_byte, closure),
+                    }
+                }
+                _ => {
+                    let half: usize = node_size_in_bytes / 2;
+                    match is_left {
+                        true => node[..half].iter().fold(0, closure),
+                        false => node[half..].iter().fold(0, closure),
+                    }
+                }
+            };
+
+            if calculated_value == self.metadata.node_count {
+                // we didn't find the address for given IP address
+                break;
+            } else if calculated_value < self.metadata.node_count {
+                offset = calculated_value as usize * node_size_in_bytes;
+                i -= 1;
+                continue;
+            } else {
+                return calculated_value;
+            }
+        }
+        0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn metadata_parsing() {
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
         assert_eq!(reader.metadata.node_count, 1431);
         assert_eq!(reader.metadata.ip_version, 6);
         assert_eq!(reader.metadata.record_size, 28);
+    }
+
+    #[test]
+    fn find_ip_offset() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+        let offset = reader.find_ip_offset(ip);
+        assert_eq!(offset, 2589);
+    }
+
+
+    #[test]
+    fn ip_bitmask() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let (bitmask, size) = Reader::ip_to_bitmask(ip);
+        assert_eq!(bitmask, 1359103392);
+        assert_eq!(size, 32);
+        // and ipv6
+        let ip: IpAddr = "2001:0db8:85a3:0000:0000:8a2e:0370:7334".parse().unwrap();
+        let (bitmask, size) = Reader::ip_to_bitmask(ip);
+        assert_eq!(bitmask, 57701172);
+        assert_eq!(size, 128);
     }
 }
