@@ -16,6 +16,7 @@ const METADATA_DELIMETER: [u8; 14] = [
     0xAB, 0xCD, 0xEF, 0x4D, 0x61, 0x78, 0x4D, 0x69, 0x6E, 0x64, 0x2E, 0x63, 0x6F, 0x6D,
 ];
 
+#[derive(Clone, PartialEq)]
 enum Type {
     Extended,
     Pointer,
@@ -35,6 +36,12 @@ enum Type {
     Float,
 }
 
+// we use it as a HashMap values in our lookup results
+pub enum ResultValue {
+    StringValue(String),
+    UintValue(u64),
+}
+
 struct Decoder<'a> {
     buffer: &'a [u8],
     cursor: usize,
@@ -50,6 +57,13 @@ impl<'a> Decoder<'a> {
         self.move_caret(1);
         current_byte
     }
+
+    fn current_byte_u64(&mut self) -> u64 {
+        let current_byte = self.buffer[self.cursor];
+        self.move_caret(1);
+        current_byte as u64
+    }
+
 
     fn next_bytes(&mut self, size: usize) -> &[u8] {
         self.move_caret(size);
@@ -107,8 +121,7 @@ impl<'a> Decoder<'a> {
     fn skip_value(&mut self) {
         let (data_type, size) = self.decode_ctrl_byte();
         match data_type {
-            Type::Pointer
-            | Type::String
+            Type::String
             | Type::Double
             | Type::Bytes
             | Type::Int32
@@ -117,6 +130,9 @@ impl<'a> Decoder<'a> {
             | Type::Uint64
             | Type::Uint128 => {
                 self.move_caret(size);
+            }
+            Type::Pointer => {
+                self.move_caret(1); // this is not exactly correct
             }
             Type::Array => {
                 for _ in 0..size {
@@ -129,7 +145,72 @@ impl<'a> Decoder<'a> {
                     self.skip_value();
                 }
             }
+            Type::Boolean => return,
             _ => panic!("Couldn't skip unknown datatype"),
+        }
+    }
+
+    fn decode_map_recursively(
+        &mut self,
+        fields: &Vec<&str>,
+        result: &mut HashMap<String, ResultValue>,
+    ) -> () {
+        let initial_offset = self.cursor;
+        for &field in fields.iter() {
+            self.cursor = initial_offset;
+            self.find_field(field, field, result);
+        }
+    }
+
+    fn find_field(
+        &mut self,
+        field: &str,
+        parts: &str,
+        result: &mut HashMap<String, ResultValue>,
+    ) -> () {
+        if parts.len() == 0 {
+            result.insert(String::from(field), self.decode_value());
+            return;
+        }
+        let dot_index = match parts.find('.') {
+            Some(value) => value,
+            None => parts.len(),
+        };
+        let search_for = &parts[..dot_index];
+        let next_parts = if dot_index == parts.len() {
+            &parts[0..0]
+        } else {
+            &parts[dot_index + 1..]
+        };
+        let ldata_type: Type;
+        let mut size;
+
+        let (ldata_type, lsize) = self.decode_ctrl_byte();
+        size = lsize;
+        if Type::Pointer == ldata_type {
+            self.cursor = self.get_pointer_address();
+            let (_, lsize) = self.decode_ctrl_byte();
+            size = lsize;
+        }
+        for _ in 0..size {
+            let key = self.decode_string();
+            if key == search_for {
+                return self.find_field(field, next_parts, result);
+            } else {
+                self.skip_value()
+            }
+        }
+    }
+
+
+    fn decode_value(&mut self) -> ResultValue {
+        let (data_type, size) = self.decode_ctrl_byte();
+        match data_type {
+            Type::String => {
+                let value = from_utf8(self.next_bytes(size)).unwrap();
+                ResultValue::StringValue(String::from(value))
+            }
+            _ => panic!("finish bloody decoding"),
         }
     }
 
@@ -149,9 +230,57 @@ impl<'a> Decoder<'a> {
     }
 
     fn decode_string(&mut self) -> &str {
-        let (_data_type, size) = self.decode_ctrl_byte();
-        let data = self.next_bytes(size);
-        from_utf8(data).unwrap()
+        let (data_type, size) = self.decode_ctrl_byte();
+        match data_type {
+            Type::String => {
+                let data = self.next_bytes(size);
+                from_utf8(data).unwrap()
+            }
+            Type::Pointer => {
+                let pointer_offset = self.get_pointer_address();
+                let byte = &self.buffer[pointer_offset];
+                let mut size = (byte & 0x1F) as usize;
+                if size >= 29 {
+                    if size == 29 {
+                        size = 29 + self.decode_n_bytes_as_uint(1) as usize;
+                    } else if size == 30 {
+                        size = 285 + self.decode_n_bytes_as_uint(2) as usize;
+                    } else if size == 31 {
+                        size = 65821 + self.decode_n_bytes_as_uint(3) as usize;
+                    }
+                }
+                let data = &self.buffer[pointer_offset + 1..pointer_offset + 1 + size];
+                let parsed = from_utf8(data);
+                parsed.expect("some result")
+            }
+            _ => panic!("tried to decode a string"),
+        }
+    }
+
+    fn get_pointer_address(&mut self) -> usize {
+        let current_byte = self.buffer[self.cursor - 1] as u64;
+        let size = current_byte & 0x18 >> 3;
+        match size {
+            1 => {
+                2048 + ((current_byte & 0x7) << 16
+                    | self.current_byte_u64() << 8
+                    | self.current_byte_u64()) as usize
+            }
+            2 => {
+                526336
+                    + ((current_byte & 0x7) << 24
+                        | self.current_byte_u64() << 16
+                        | self.current_byte_u64() << 8
+                        | self.current_byte_u64()) as usize
+            }
+            3 => {
+                ((self.current_byte_u64()) << 24
+                    | self.current_byte_u64() << 16
+                    | self.current_byte_u64() << 8
+                    | self.current_byte_u64()) as usize
+            }
+            _ => (((current_byte & 0x7) << 8) + self.current_byte_u64()) as usize,
+        }
     }
 }
 
@@ -263,11 +392,41 @@ impl Reader {
         }
         0
     }
+
+    pub fn lookup(
+        &self,
+        ip: IpAddr,
+        fields: &Vec<&str>,
+        result: &mut HashMap<String, ResultValue>,
+    ) -> () {
+        let search_tree_size = (self.metadata.record_size / 4) * self.metadata.node_count + 16;
+        let offset = self.find_ip_offset(ip);
+
+        let mut decoder = Decoder {
+            buffer: &self.buffer[search_tree_size as usize..],
+            cursor: (offset - self.metadata.node_count - 16) as usize,
+        };
+        decoder.decode_map_recursively(fields, result)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lookup() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+        let fields: Vec<&str> = vec!["country.names.en"];
+        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
+        reader.lookup(ip, &fields, &mut result);
+        let v = &result[fields[0]];
+        if let ResultValue::StringValue(value) = v {
+            assert_eq!(value, &String::from("United Kingdom"));
+        }
+
+    }
 
     #[test]
     fn metadata_parsing() {
@@ -284,7 +443,6 @@ mod tests {
         let offset = reader.find_ip_offset(ip);
         assert_eq!(offset, 2589);
     }
-
 
     #[test]
     fn ip_bitmask() {
