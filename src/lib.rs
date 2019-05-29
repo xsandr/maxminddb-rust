@@ -1,3 +1,6 @@
+#![feature(test)]
+extern crate test;
+
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -413,6 +416,7 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test::Bencher;
 
     #[test]
     fn lookup() {
@@ -455,5 +459,15 @@ mod tests {
         let (bitmask, size) = Reader::ip_to_bitmask(ip);
         assert_eq!(bitmask, 57701172);
         assert_eq!(size, 128);
+    }
+
+    #[bench]
+    fn bench_ip_lookup(b: &mut Bencher) {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+        let fields: Vec<&str> = vec!["country.names.en"];
+        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
+
+        b.iter(|| reader.lookup(ip, &fields, &mut result));
     }
 }
