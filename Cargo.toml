@@ -9,3 +9,10 @@ debug = true
 
 [dependencies]
 
+
+[dev-dependencies]
+criterion = "0.2"
+
+[[bench]]
+name = "benchmark"
+harness = false

@@ -1,6 +1,3 @@
-#![feature(test)]
-extern crate test;
-
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -218,9 +215,7 @@ impl<'a> Decoder<'a> {
                 self.cursor = self.get_pointer_address();
                 self.decode_value()
             }
-            Type::Boolean => {
-                ResultValue::BooleanValue(size == 1)
-            }
+            Type::Boolean => ResultValue::BooleanValue(size == 1),
             _ => panic!("finish bloody decoding {:?}", data_type),
         }
     }
@@ -424,13 +419,16 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test::Bencher;
 
     #[test]
     fn lookup() {
         let ip: IpAddr = "81.2.69.160".parse().unwrap();
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let fields: Vec<&str> = vec!["city.names.en" , "country.names.en", "country.is_in_european_union"];
+        let fields: Vec<&str> = vec![
+            "city.names.en",
+            "country.names.en",
+            "country.is_in_european_union",
+        ];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
         reader.lookup(ip, &fields, &mut result);
 
@@ -473,15 +471,5 @@ mod tests {
         let (bitmask, size) = Reader::ip_to_bitmask(ip);
         assert_eq!(bitmask, 57701172);
         assert_eq!(size, 128);
-    }
-
-    #[bench]
-    fn bench_ip_lookup(b: &mut Bencher) {
-        let ip: IpAddr = "81.2.69.160".parse().unwrap();
-        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let fields: Vec<&str> = vec!["city.names.en" , "country.names.en", "country.is_in_european_union"];
-        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
-
-        b.iter(|| reader.lookup(ip, &fields, &mut result));
     }
 }
