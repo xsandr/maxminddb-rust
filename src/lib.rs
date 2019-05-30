@@ -19,7 +19,7 @@ const METADATA_DELIMETER: [u8; 14] = [
     0xAB, 0xCD, 0xEF, 0x4D, 0x61, 0x78, 0x4D, 0x69, 0x6E, 0x64, 0x2E, 0x63, 0x6F, 0x6D,
 ];
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Type {
     Extended,
     Pointer,
@@ -43,6 +43,7 @@ enum Type {
 pub enum ResultValue {
     StringValue(String),
     UintValue(u64),
+    BooleanValue(bool),
 }
 
 struct Decoder<'a> {
@@ -213,7 +214,14 @@ impl<'a> Decoder<'a> {
                 let value = from_utf8(self.next_bytes(size)).unwrap();
                 ResultValue::StringValue(String::from(value))
             }
-            _ => panic!("finish bloody decoding"),
+            Type::Pointer => {
+                self.cursor = self.get_pointer_address();
+                self.decode_value()
+            }
+            Type::Boolean => {
+                ResultValue::BooleanValue(size == 1)
+            }
+            _ => panic!("finish bloody decoding {:?}", data_type),
         }
     }
 
@@ -422,12 +430,18 @@ mod tests {
     fn lookup() {
         let ip: IpAddr = "81.2.69.160".parse().unwrap();
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let fields: Vec<&str> = vec!["country.names.en"];
+        let fields: Vec<&str> = vec!["city.names.en" , "country.names.en", "country.is_in_european_union"];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
         reader.lookup(ip, &fields, &mut result);
-        let v = &result[fields[0]];
+
+        let v = &result["country.names.en"];
         if let ResultValue::StringValue(value) = v {
             assert_eq!(value, &String::from("United Kingdom"));
+        }
+
+        let v = &result["city.names.en"];
+        if let ResultValue::StringValue(value) = v {
+            assert_eq!(value, &String::from("London"));
         }
 
     }
@@ -465,7 +479,7 @@ mod tests {
     fn bench_ip_lookup(b: &mut Bencher) {
         let ip: IpAddr = "81.2.69.160".parse().unwrap();
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let fields: Vec<&str> = vec!["country.names.en"];
+        let fields: Vec<&str> = vec!["city.names.en" , "country.names.en", "country.is_in_european_union"];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
 
         b.iter(|| reader.lookup(ip, &fields, &mut result));
