@@ -11,6 +11,40 @@ pub struct Metadata {
     pub ip_version: u64,
 }
 
+impl Metadata {
+    pub fn parse_metadata(buffer: &Vec<u8>) -> Metadata {
+        let index = Metadata::get_metadata_block_offset(&buffer);
+
+        let fields = vec!["node_count", "record_size", "ip_version"];
+        let mut decoder = Decoder::new(&buffer[index..], 0);
+        let hm = decoder.decode_map(&fields);
+
+        Metadata {
+            node_count: hm["node_count"],
+            record_size: hm["record_size"],
+            ip_version: hm["ip_version"],
+        }
+    }
+
+    fn get_metadata_block_offset(buffer: &Vec<u8>) -> usize {
+        let mut cur = 13;
+        let mut index = 0;
+        for (i, &item) in buffer.iter().rev().enumerate() {
+            if METADATA_DELIMETER[cur] != item {
+                cur = 13;
+            } else {
+                cur -= 1;
+            }
+            if cur == 0 {
+                index = buffer.len() - i - 2 + METADATA_DELIMETER.len();
+                break;
+            }
+        }
+        index
+    }
+}
+
+
 // metadata section delimiter - xABxCDxEFMaxMind.com
 const METADATA_DELIMETER: [u8; 14] = [
     0xAB, 0xCD, 0xEF, 0x4D, 0x61, 0x78, 0x4D, 0x69, 0x6E, 0x64, 0x2E, 0x63, 0x6F, 0x6D,
@@ -49,6 +83,10 @@ struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
+    fn new(buffer: &'a [u8], cursor: usize) -> Self {
+        Decoder{buffer, cursor}
+    }
+
     fn move_caret(&mut self, n: usize) -> () {
         self.cursor += n
     }
@@ -290,42 +328,6 @@ impl<'a> Decoder<'a> {
     }
 }
 
-impl Metadata {
-    pub fn parse_metadata(buffer: &Vec<u8>) -> Metadata {
-        let index = Metadata::get_metadata_block_offset(&buffer);
-
-        let fields = vec!["node_count", "record_size", "ip_version"];
-        let mut decoder = Decoder {
-            buffer: &buffer[index..],
-            cursor: 0,
-        };
-        let hm = decoder.decode_map(&fields);
-
-        Metadata {
-            node_count: hm["node_count"],
-            record_size: hm["record_size"],
-            ip_version: hm["ip_version"],
-        }
-    }
-
-    fn get_metadata_block_offset(buffer: &Vec<u8>) -> usize {
-        let mut cur = 13;
-        let mut index = 0;
-        for (i, &item) in buffer.iter().rev().enumerate() {
-            if METADATA_DELIMETER[cur] != item {
-                cur = 13;
-            } else {
-                cur -= 1;
-            }
-            if cur == 0 {
-                index = buffer.len() - i - 2 + METADATA_DELIMETER.len();
-                break;
-            }
-        }
-        index
-    }
-}
-
 pub struct Reader {
     pub metadata: Metadata,
     buffer: Vec<u8>,
@@ -408,10 +410,10 @@ impl Reader {
         let search_tree_size = (self.metadata.record_size / 4) * self.metadata.node_count + 16;
         let offset = self.find_ip_offset(ip);
 
-        let mut decoder = Decoder {
-            buffer: &self.buffer[search_tree_size as usize..],
-            cursor: (offset - self.metadata.node_count - 16) as usize,
-        };
+        let mut decoder = Decoder::new(
+            &self.buffer[search_tree_size as usize..],
+            (offset - self.metadata.node_count - 16) as usize,
+        );
         decoder.decode_map_recursively(fields, result)
     }
 }
