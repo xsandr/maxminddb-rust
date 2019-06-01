@@ -191,12 +191,19 @@ impl<'a> Decoder<'a> {
         &mut self,
         fields: &Vec<&str>,
         result: &mut HashMap<String, ResultValue>,
-    ) -> () {
+    ) -> Option<()> {
         let initial_offset = self.cursor;
+        let mut found = false;
         for &field in fields.iter() {
             self.cursor = initial_offset;
-            self.find_field(field, field, result);
+            if self.find_field(field, field, result) {
+                found = true;
+            }
         }
+        if found {
+            return Some(());
+        }
+        None
     }
 
     fn find_field(
@@ -204,10 +211,10 @@ impl<'a> Decoder<'a> {
         field: &str,
         parts: &str,
         result: &mut HashMap<String, ResultValue>,
-    ) -> () {
+    ) -> bool {
         if parts.is_empty() {
             result.insert(String::from(field), self.decode_value());
-            return;
+            return true;
         }
         let dot_index = match parts.find('.') {
             Some(value) => value,
@@ -237,6 +244,7 @@ impl<'a> Decoder<'a> {
                 self.skip_value()
             }
         }
+        false
     }
 
     fn decode_value(&mut self) -> ResultValue {
@@ -349,7 +357,7 @@ impl Reader {
         (bitmask, size)
     }
 
-    fn find_ip_offset(&self, ip: IpAddr) -> u64 {
+    fn find_ip_offset(&self, ip: IpAddr) -> Option<u64> {
         let closure = |acc, &x| (acc << 8) | u64::from(x);
         let node_size_in_bytes = (self.metadata.record_size / 4) as usize;
 
@@ -359,8 +367,7 @@ impl Reader {
             IpAddr::V6(_) => 0,
         };
 
-        let mut i = size - 1;
-        while i >= 0 {
+        for i in (0..size).rev() {
             let is_left = (bitmask >> i) & 1 == 0;
             let node = &self.buffer[offset..offset + node_size_in_bytes];
 
@@ -387,13 +394,11 @@ impl Reader {
                 break;
             } else if calculated_value < self.metadata.node_count {
                 offset = calculated_value as usize * node_size_in_bytes;
-                i -= 1;
-                continue;
             } else {
-                return calculated_value;
+                return Some(calculated_value);
             }
         }
-        0
+        None
     }
 
     pub fn lookup(
@@ -401,9 +406,9 @@ impl Reader {
         ip: IpAddr,
         fields: &Vec<&str>,
         result: &mut HashMap<String, ResultValue>,
-    ) -> () {
+    ) -> Option<()> {
         let search_tree_size = (self.metadata.record_size / 4) * self.metadata.node_count + 16;
-        let offset = self.find_ip_offset(ip);
+        let offset = self.find_ip_offset(ip)?;
 
         let mut decoder = Decoder::new(
             &self.buffer[search_tree_size as usize..],
@@ -427,7 +432,9 @@ mod tests {
             "country.is_in_european_union",
         ];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
-        reader.lookup(ip, &fields, &mut result);
+        if let None = reader.lookup(ip, &fields, &mut result) {
+            assert!(false);
+        };
 
         let v = &result["country.names.en"];
         if let ResultValue::StringValue(value) = v {
@@ -453,7 +460,7 @@ mod tests {
     fn find_ip_offset() {
         let ip: IpAddr = "81.2.69.160".parse().unwrap();
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let offset = reader.find_ip_offset(ip);
+        let offset = reader.find_ip_offset(ip).unwrap();
         assert_eq!(offset, 2589);
     }
 
