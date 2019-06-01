@@ -84,7 +84,7 @@ struct Decoder<'a> {
 
 impl<'a> Decoder<'a> {
     fn new(buffer: &'a [u8], cursor: usize) -> Self {
-        Decoder{buffer, cursor}
+        Decoder { buffer, cursor }
     }
 
     fn move_caret(&mut self, n: usize) -> () {
@@ -103,7 +103,6 @@ impl<'a> Decoder<'a> {
         current_byte as u64
     }
 
-
     fn next_bytes(&mut self, size: usize) -> &[u8] {
         self.move_caret(size);
         &self.buffer[self.cursor - size..self.cursor]
@@ -116,6 +115,7 @@ impl<'a> Decoder<'a> {
             type_bits = 7 + self.current_byte();
         }
         let data_type = match type_bits {
+            0 => Type::Extended,
             1 => Type::Pointer,
             2 => Type::String,
             3 => Type::Double,
@@ -131,18 +131,15 @@ impl<'a> Decoder<'a> {
             13 => Type::EndMarker,
             14 => Type::Boolean,
             15 => Type::Float,
-            _ => panic!("Unknown type"),
+            _ => unreachable!(),
         };
-        let mut size = (byte & 0x1F) as usize;
-        if size >= 29 {
-            if size == 29 {
-                size = 29 + self.decode_n_bytes_as_uint(1) as usize; // TODO extract it to the separate method
-            } else if size == 30 {
-                size = 285 + self.decode_n_bytes_as_uint(2) as usize;
-            } else if size == 31 {
-                size = 65821 + self.decode_n_bytes_as_uint(3) as usize;
-            }
-        }
+        let size = match byte & 0x1F {
+            size if size < 29 => size as u64,
+            29 => 29 + self.decode_n_bytes_as_uint(1),
+            30 => 285 + self.decode_n_bytes_as_uint(2),
+            31 => 65821 + self.decode_n_bytes_as_uint(3),
+            _ => unreachable!(),
+        } as usize;
         (data_type, size)
     }
 
@@ -171,7 +168,8 @@ impl<'a> Decoder<'a> {
                 self.move_caret(size);
             }
             Type::Pointer => {
-                self.move_caret(1); // this is not exactly correct
+                // as a side effect of pointer resolving we'll move the carret
+                self.get_pointer_address();
             }
             Type::Array => {
                 for _ in 0..size {
@@ -185,7 +183,7 @@ impl<'a> Decoder<'a> {
                 }
             }
             Type::Boolean => return,
-            _ => panic!("Couldn't skip unknown datatype"),
+            _ => unreachable!(),
         }
     }
 
@@ -207,7 +205,7 @@ impl<'a> Decoder<'a> {
         parts: &str,
         result: &mut HashMap<String, ResultValue>,
     ) -> () {
-        if parts.len() == 0 {
+        if parts.is_empty() {
             result.insert(String::from(field), self.decode_value());
             return;
         }
@@ -221,16 +219,16 @@ impl<'a> Decoder<'a> {
         } else {
             &parts[dot_index + 1..]
         };
-        let ldata_type: Type;
-        let mut size;
 
-        let (ldata_type, lsize) = self.decode_ctrl_byte();
-        size = lsize;
-        if Type::Pointer == ldata_type {
-            self.cursor = self.get_pointer_address();
-            let (_, lsize) = self.decode_ctrl_byte();
-            size = lsize;
-        }
+        let size = match self.decode_ctrl_byte() {
+            (Type::Pointer, _) => {
+                self.cursor = self.get_pointer_address();
+                let (_, size) = self.decode_ctrl_byte();
+                size
+            }
+            (_, size) => size,
+        };
+
         for _ in 0..size {
             let key = self.decode_string();
             if key == search_for {
@@ -240,7 +238,6 @@ impl<'a> Decoder<'a> {
             }
         }
     }
-
 
     fn decode_value(&mut self) -> ResultValue {
         let (data_type, size) = self.decode_ctrl_byte();
@@ -283,16 +280,14 @@ impl<'a> Decoder<'a> {
             Type::Pointer => {
                 let pointer_offset = self.get_pointer_address();
                 let byte = &self.buffer[pointer_offset];
-                let mut size = (byte & 0x1F) as usize;
-                if size >= 29 {
-                    if size == 29 {
-                        size = 29 + self.decode_n_bytes_as_uint(1) as usize;
-                    } else if size == 30 {
-                        size = 285 + self.decode_n_bytes_as_uint(2) as usize;
-                    } else if size == 31 {
-                        size = 65821 + self.decode_n_bytes_as_uint(3) as usize;
-                    }
-                }
+                let size = match byte & 0x1F {
+                    size if size < 29 => size as u64,
+                    29 => 29 + self.decode_n_bytes_as_uint(1),
+                    30 => 285 + self.decode_n_bytes_as_uint(2),
+                    31 => 65821 + self.decode_n_bytes_as_uint(3),
+                    _ => panic!("unreachable"),
+                } as usize;
+
                 let data = &self.buffer[pointer_offset + 1..pointer_offset + 1 + size];
                 let parsed = from_utf8(data);
                 parsed.expect("some result")
@@ -303,28 +298,28 @@ impl<'a> Decoder<'a> {
 
     fn get_pointer_address(&mut self) -> usize {
         let current_byte = self.buffer[self.cursor - 1] as u64;
-        let size = current_byte & 0x18 >> 3;
-        match size {
+        let size = match current_byte & 0x18 >> 3 {
             1 => {
-                2048 + ((current_byte & 0x7) << 16
+                2048 + (current_byte & 0x7) << 16
                     | self.current_byte_u64() << 8
-                    | self.current_byte_u64()) as usize
+                    | self.current_byte_u64()
             }
             2 => {
-                526336
-                    + ((current_byte & 0x7) << 24
-                        | self.current_byte_u64() << 16
-                        | self.current_byte_u64() << 8
-                        | self.current_byte_u64()) as usize
-            }
-            3 => {
-                ((self.current_byte_u64()) << 24
+                526336 + (current_byte & 0x7) << 24
                     | self.current_byte_u64() << 16
                     | self.current_byte_u64() << 8
-                    | self.current_byte_u64()) as usize
+                    | self.current_byte_u64()
             }
-            _ => (((current_byte & 0x7) << 8) + self.current_byte_u64()) as usize,
-        }
+            3 => {
+                (self.current_byte_u64()) << 24
+                    | self.current_byte_u64() << 16
+                    | self.current_byte_u64() << 8
+                    | self.current_byte_u64()
+            }
+
+            _ => ((current_byte & 0x7) << 8) + self.current_byte_u64(),
+        };
+        size as usize
     }
 }
 
