@@ -266,7 +266,7 @@ impl<'a> Decoder<'a> {
                 self.decode_value()
             }
             Type::Boolean => ResultValue::BooleanValue(size == 1),
-            _ => panic!("finish bloody decoding {:?}", data_type),
+            _ => unimplemented!(),
         }
     }
 
@@ -308,7 +308,7 @@ impl<'a> Decoder<'a> {
                 let parsed = from_utf8(data);
                 parsed.expect("found invalid string")
             }
-            _ => panic!("tried to decode a string"),
+            _ => unreachable!(),
         }
     }
 

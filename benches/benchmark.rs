@@ -28,7 +28,7 @@ fn lookup_benchmark_region(c: &mut Criterion) {
     let fields: Vec<&str> = vec![
         "city.names.en",
         "country.names.en",
-        "subdivisions.0.is_in_european_union",
+        "subdivisions.0.names.en",
     ];
     let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
 
