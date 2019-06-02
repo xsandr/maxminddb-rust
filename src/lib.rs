@@ -92,15 +92,13 @@ impl<'a> Decoder<'a> {
     }
 
     fn current_byte(&mut self) -> u8 {
-        let current_byte = self.buffer[self.cursor];
         self.move_caret(1);
-        current_byte
+        self.buffer[self.cursor - 1]
     }
 
     fn current_byte_u64(&mut self) -> u64 {
-        let current_byte = self.buffer[self.cursor];
         self.move_caret(1);
-        current_byte as u64
+        self.buffer[self.cursor - 1] as u64
     }
 
     fn next_bytes(&mut self, size: usize) -> &[u8] {
@@ -226,6 +224,10 @@ impl<'a> Decoder<'a> {
         } else {
             &parts[dot_index + 1..]
         };
+        let (is_num, index) = match search_for.parse::<usize>() {
+            Ok(v) => (true, v),
+            Err(_) => (false, 0),
+        };
 
         let size = match self.decode_ctrl_byte() {
             (Type::Pointer, _) => {
@@ -236,13 +238,18 @@ impl<'a> Decoder<'a> {
             (_, size) => size,
         };
 
-        for _ in 0..size {
-            let key = self.decode_string();
-            if key == search_for {
-                return self.find_field(field, next_parts, result);
+        for i in 0..size {
+            if is_num {
+                if i == index {
+                    return self.find_field(field, next_parts, result);
+                }
             } else {
-                self.skip_value()
+                let key = self.decode_string();
+                if key == search_for {
+                    return self.find_field(field, next_parts, result);
+                }
             }
+            self.skip_value()
         }
         false
     }
@@ -296,9 +303,10 @@ impl<'a> Decoder<'a> {
                     _ => panic!("unreachable"),
                 } as usize;
 
-                let data = &self.buffer[pointer_offset + 1..pointer_offset + 1 + size];
+                let left_bound = pointer_offset + 1;
+                let data = &self.buffer[left_bound..left_bound + size];
                 let parsed = from_utf8(data);
-                parsed.expect("some result")
+                parsed.expect("found invalid string")
             }
             _ => panic!("tried to decode a string"),
         }
@@ -306,28 +314,29 @@ impl<'a> Decoder<'a> {
 
     fn get_pointer_address(&mut self) -> usize {
         let current_byte = self.buffer[self.cursor - 1] as u64;
-        let size = match current_byte & 0x18 >> 3 {
+        let pointer_size = (current_byte & 0x18) >> 3;
+        let pointer_offset = match pointer_size {
+            0 => ((current_byte & 0x7) << 8) + self.current_byte_u64(),
             1 => {
-                2048 + (current_byte & 0x7) << 16
+                2048 + ((current_byte & 0x7) << 16)
                     | self.current_byte_u64() << 8
                     | self.current_byte_u64()
             }
             2 => {
-                526336 + (current_byte & 0x7) << 24
+                526336 + ((current_byte & 0x7) << 24)
                     | self.current_byte_u64() << 16
                     | self.current_byte_u64() << 8
                     | self.current_byte_u64()
             }
             3 => {
-                (self.current_byte_u64()) << 24
+                self.current_byte_u64() << 24
                     | self.current_byte_u64() << 16
                     | self.current_byte_u64() << 8
                     | self.current_byte_u64()
             }
-
-            _ => ((current_byte & 0x7) << 8) + self.current_byte_u64(),
+            _ => unreachable!(),
         };
-        size as usize
+        pointer_offset as usize
     }
 }
 
@@ -423,10 +432,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lookup_array() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+
+        let fields = vec!["city.names.en", "subdivisions.0.names.en"];
+        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
+        if let None = reader.lookup(ip, &fields, &mut result) {
+            assert!(false);
+        };
+
+        let v = &result["subdivisions.0.names.en"];
+        if let ResultValue::StringValue(value) = v {
+            assert_eq!(value, &String::from("England"));
+        }
+
+        let v = &result["city.names.en"];
+        if let ResultValue::StringValue(value) = v {
+            assert_eq!(value, &String::from("London"));
+        }
+    }
+
+    #[test]
     fn lookup() {
         let ip: IpAddr = "81.2.69.160".parse().unwrap();
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-        let fields: Vec<&str> = vec![
+        let fields = vec![
             "city.names.en",
             "country.names.en",
             "country.is_in_european_union",
@@ -445,7 +476,6 @@ mod tests {
         if let ResultValue::StringValue(value) = v {
             assert_eq!(value, &String::from("London"));
         }
-
     }
 
     #[test]
