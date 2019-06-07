@@ -75,6 +75,8 @@ pub enum ResultValue {
     String(String),
     Uint(u64),
     Boolean(bool),
+    Double(f64),
+    Float(f32),
 }
 
 struct Decoder<'a> {
@@ -266,6 +268,18 @@ impl<'a> Decoder<'a> {
                 self.decode_value()
             }
             Type::Boolean => ResultValue::Boolean(size == 1),
+            Type::Float => {
+                let raw_value: u32 = self
+                    .next_bytes(size)
+                    .iter()
+                    .fold(0u32, |acc, &x| (acc << 8) | u32::from(x));
+                let value = f32::from_bits(raw_value);
+                ResultValue::Float(value)
+            }
+            Type::Double => {
+                let value = f64::from_bits(self.decode_n_bytes_as_uint(size));
+                ResultValue::Double(value)
+            }
             _ => unimplemented!(),
         }
     }
@@ -459,6 +473,23 @@ mod tests {
         let v = &result["city.names.en"];
         if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("London"));
+        }
+    }
+
+    #[test]
+    fn location_lookup() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
+        let fields = vec!["location.latitude", "location.longitude"];
+        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
+        if let None = reader.lookup(ip, &fields, &mut result) {
+            assert!(false);
+        };
+        if let ResultValue::Double(v) = result["location.latitude"] {
+            assert_eq!(v, 51.514200000000002);
+        }
+        if let ResultValue::Double(v) = result["location.longitude"] {
+            assert_eq!(v, -0.093100000000000002);
         }
     }
 
