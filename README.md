@@ -22,7 +22,7 @@ fn main() {
     ];
     let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
     reader.lookup(ip, &fields, &mut result);
-    if let ResultValue::StringValue(v) = &result["subdivisions.0.names.en"] {
+    if let ResultValue::String(v) = &result["subdivisions.0.names.en"] {
         println!("{}", v);
     }
 }

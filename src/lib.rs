@@ -72,9 +72,9 @@ enum Type {
 
 // we use it as a HashMap values in our lookup results
 pub enum ResultValue {
-    StringValue(String),
-    UintValue(u64),
-    BooleanValue(bool),
+    String(String),
+    Uint(u64),
+    Boolean(bool),
 }
 
 struct Decoder<'a> {
@@ -259,13 +259,13 @@ impl<'a> Decoder<'a> {
         match data_type {
             Type::String => {
                 let value = from_utf8(self.next_bytes(size)).unwrap();
-                ResultValue::StringValue(String::from(value))
+                ResultValue::String(String::from(value))
             }
             Type::Pointer => {
                 self.cursor = self.get_pointer_address();
                 self.decode_value()
             }
-            Type::Boolean => ResultValue::BooleanValue(size == 1),
+            Type::Boolean => ResultValue::Boolean(size == 1),
             _ => unimplemented!(),
         }
     }
@@ -308,25 +308,33 @@ impl<'a> Decoder<'a> {
                 let parsed = from_utf8(data);
                 parsed.expect("found invalid string")
             }
-            _ => unreachable!(),
+            _ => unreachable!("tried to decode string with wrong type {:?}", data_type),
         }
     }
 
     fn get_pointer_address(&mut self) -> usize {
         let current_byte = self.buffer[self.cursor - 1] as u64;
-        let pointer_size = (current_byte & 0x18) >> 3;
+        let size = match current_byte & 0x1F {
+            size if size < 29 => size as u64,
+            29 => 29 + self.decode_n_bytes_as_uint(1),
+            30 => 285 + self.decode_n_bytes_as_uint(2),
+            31 => 65821 + self.decode_n_bytes_as_uint(3),
+            _ => unreachable!(),
+        } as u64;
+        let pointer_size = (size >> 3) & 0x3;
         let pointer_offset = match pointer_size {
-            0 => ((current_byte & 0x7) << 8) + self.current_byte_u64(),
+            0 => ((size & 0x7) << 8) + self.current_byte_u64(),
             1 => {
-                2048 + ((current_byte & 0x7) << 16)
+                2048 + (((size & 0x7) << 16)
                     | self.current_byte_u64() << 8
-                    | self.current_byte_u64()
+                    | self.current_byte_u64())
             }
             2 => {
-                526336 + ((current_byte & 0x7) << 24)
-                    | self.current_byte_u64() << 16
-                    | self.current_byte_u64() << 8
-                    | self.current_byte_u64()
+                526336
+                    + (((size & 0x7) << 24)
+                        | self.current_byte_u64() << 16
+                        | self.current_byte_u64() << 8
+                        | self.current_byte_u64())
             }
             3 => {
                 self.current_byte_u64() << 24
@@ -334,7 +342,7 @@ impl<'a> Decoder<'a> {
                     | self.current_byte_u64() << 8
                     | self.current_byte_u64()
             }
-            _ => unreachable!(),
+            _ => unreachable!("wrong pointer size"),
         };
         pointer_offset as usize
     }
@@ -418,10 +426,11 @@ impl Reader {
     ) -> Option<()> {
         let search_tree_size = (self.metadata.record_size / 4) * self.metadata.node_count + 16;
         let offset = self.find_ip_offset(ip)?;
+        let data_section_offset = offset - self.metadata.node_count - 16;
 
         let mut decoder = Decoder::new(
             &self.buffer[search_tree_size as usize..],
-            (offset - self.metadata.node_count - 16) as usize,
+            data_section_offset as usize,
         );
         decoder.decode_map_recursively(fields, result)
     }
@@ -443,12 +452,12 @@ mod tests {
         };
 
         let v = &result["subdivisions.0.names.en"];
-        if let ResultValue::StringValue(value) = v {
+        if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("England"));
         }
 
         let v = &result["city.names.en"];
-        if let ResultValue::StringValue(value) = v {
+        if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("London"));
         }
     }
@@ -468,15 +477,16 @@ mod tests {
         };
 
         let v = &result["country.names.en"];
-        if let ResultValue::StringValue(value) = v {
+        if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("United Kingdom"));
         }
 
         let v = &result["city.names.en"];
-        if let ResultValue::StringValue(value) = v {
+        if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("London"));
         }
     }
+
 
     #[test]
     fn metadata_parsing() {
