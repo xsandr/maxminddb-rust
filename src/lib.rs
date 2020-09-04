@@ -12,7 +12,7 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    pub fn parse_metadata(buffer: &Vec<u8>) -> Metadata {
+    pub fn parse_metadata(buffer: &[u8]) -> Metadata {
         let index = Metadata::get_metadata_block_offset(&buffer);
 
         let fields = vec!["node_count", "record_size", "ip_version"];
@@ -26,7 +26,7 @@ impl Metadata {
         }
     }
 
-    fn get_metadata_block_offset(buffer: &Vec<u8>) -> usize {
+    fn get_metadata_block_offset(buffer: &[u8]) -> usize {
         let mut cur = 13;
         let mut index = 0;
         for (i, &item) in buffer.iter().rev().enumerate() {
@@ -43,7 +43,6 @@ impl Metadata {
         index
     }
 }
-
 
 // metadata section delimiter - xABxCDxEFMaxMind.com
 const METADATA_DELIMETER: [u8; 14] = [
@@ -89,7 +88,7 @@ impl<'a> Decoder<'a> {
         Decoder { buffer, cursor }
     }
 
-    fn move_caret(&mut self, n: usize) -> () {
+    fn move_caret(&mut self, n: usize) {
         self.cursor += n
     }
 
@@ -182,7 +181,7 @@ impl<'a> Decoder<'a> {
                     self.skip_value();
                 }
             }
-            Type::Boolean => return,
+            Type::Boolean => {}
             _ => unreachable!(),
         }
     }
@@ -373,10 +372,7 @@ impl Reader {
         let buffer: Vec<u8> = fs::read(&path)?;
         let metadata = Metadata::parse_metadata(&buffer);
 
-        Ok(Reader {
-            metadata: metadata,
-            buffer,
-        })
+        Ok(Reader { metadata, buffer })
     }
 
     fn ip_to_bitmask(ip_address: IpAddr) -> (u32, usize) {
@@ -517,7 +513,6 @@ mod tests {
             assert_eq!(value, &String::from("London"));
         }
     }
-
 
     #[test]
     fn metadata_parsing() {
