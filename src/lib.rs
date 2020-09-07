@@ -5,49 +5,48 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::str::from_utf8;
 
-pub struct Metadata {
-    pub node_count: u64,
-    pub record_size: u64,
-    pub ip_version: u64,
-}
-
-impl Metadata {
-    pub fn parse_metadata(buffer: &[u8]) -> Metadata {
-        let index = Metadata::get_metadata_block_offset(&buffer);
-
-        let fields = vec!["node_count", "record_size", "ip_version"];
-        let mut decoder = Decoder::new(&buffer[index..], 0);
-        let hm = decoder.decode_map(&fields);
-
-        Metadata {
-            node_count: hm["node_count"],
-            record_size: hm["record_size"],
-            ip_version: hm["ip_version"],
-        }
-    }
-
-    fn get_metadata_block_offset(buffer: &[u8]) -> usize {
-        let mut cur = 13;
-        let mut index = 0;
-        for (i, &item) in buffer.iter().rev().enumerate() {
-            if METADATA_DELIMETER[cur] != item {
-                cur = 13;
-            } else {
-                cur -= 1;
-            }
-            if cur == 0 {
-                index = buffer.len() - i - 2 + METADATA_DELIMETER.len();
-                break;
-            }
-        }
-        index
-    }
-}
-
 // metadata section delimiter - xABxCDxEFMaxMind.com
 const METADATA_DELIMETER: [u8; 14] = [
     0xAB, 0xCD, 0xEF, 0x4D, 0x61, 0x78, 0x4D, 0x69, 0x6E, 0x64, 0x2E, 0x63, 0x6F, 0x6D,
 ];
+
+struct Metadata {
+    node_count: u64,
+    record_size: u64,
+}
+
+impl Metadata {
+    fn parse_metadata(buffer: &[u8]) -> Metadata {
+        let offset = Metadata::get_metadata_block_offset(&buffer);
+        let mut decoder = Decoder::new(&buffer[offset..], 0);
+
+        let fields = vec!["node_count", "record_size", "ip_version"];
+        let metadata = decoder.decode_map(&fields);
+
+        Metadata {
+            node_count: metadata["node_count"],
+            record_size: metadata["record_size"],
+        }
+    }
+
+    fn get_metadata_block_offset(buffer: &[u8]) -> usize {
+        let mut current_offset = 13;
+        let mut offset = 0;
+
+        for (i, &item) in buffer.iter().rev().enumerate() {
+            if METADATA_DELIMETER[current_offset] != item {
+                current_offset = 13;
+            } else {
+                current_offset -= 1;
+            }
+            if current_offset == 0 {
+                offset = buffer.len() - i - 2 + METADATA_DELIMETER.len();
+                break;
+            }
+        }
+        offset
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Type {
@@ -80,31 +79,31 @@ pub enum ResultValue {
 
 struct Decoder<'a> {
     buffer: &'a [u8],
-    cursor: usize,
+    offset: usize,
 }
 
 impl<'a> Decoder<'a> {
-    fn new(buffer: &'a [u8], cursor: usize) -> Self {
-        Decoder { buffer, cursor }
+    fn new(buffer: &'a [u8], offset: usize) -> Self {
+        Decoder { buffer, offset }
     }
 
     fn move_caret(&mut self, n: usize) {
-        self.cursor += n
+        self.offset += n
     }
 
     fn current_byte(&mut self) -> u8 {
         self.move_caret(1);
-        self.buffer[self.cursor - 1]
+        self.buffer[self.offset - 1]
     }
 
     fn current_byte_u64(&mut self) -> u64 {
         self.move_caret(1);
-        self.buffer[self.cursor - 1] as u64
+        self.buffer[self.offset - 1] as u64
     }
 
     fn next_bytes(&mut self, size: usize) -> &[u8] {
         self.move_caret(size);
-        &self.buffer[self.cursor - size..self.cursor]
+        &self.buffer[self.offset - size..self.offset]
     }
 
     fn decode_ctrl_byte(&mut self) -> (Type, usize) {
@@ -191,18 +190,18 @@ impl<'a> Decoder<'a> {
         fields: &Vec<&str>,
         result: &mut HashMap<String, ResultValue>,
     ) -> Option<()> {
-        let initial_offset = self.cursor;
-        let mut found = false;
+        // while decoding map, we store initial offset to be able start search
+        // from the beggining for every field
+        let map_offset = self.offset;
+        let mut has_found = None;
+
         for &field in fields.iter() {
-            self.cursor = initial_offset;
+            self.offset = map_offset;
             if self.find_field(field, field, result) {
-                found = true;
+                has_found = Some(());
             }
         }
-        if found {
-            return Some(());
-        }
-        None
+        has_found
     }
 
     fn find_field(
@@ -232,7 +231,7 @@ impl<'a> Decoder<'a> {
 
         let size = match self.decode_ctrl_byte() {
             (Type::Pointer, _) => {
-                self.cursor = self.get_pointer_address();
+                self.offset = self.get_pointer_address();
                 let (_, size) = self.decode_ctrl_byte();
                 size
             }
@@ -263,7 +262,7 @@ impl<'a> Decoder<'a> {
                 ResultValue::String(String::from(value))
             }
             Type::Pointer => {
-                self.cursor = self.get_pointer_address();
+                self.offset = self.get_pointer_address();
                 self.decode_value()
             }
             Type::Boolean => ResultValue::Boolean(size == 1),
@@ -326,7 +325,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn get_pointer_address(&mut self) -> usize {
-        let current_byte = self.buffer[self.cursor - 1] as u64;
+        let current_byte = self.buffer[self.offset - 1] as u64;
         let size = match current_byte & 0x1F {
             size if size < 29 => size as u64,
             29 => 29 + self.decode_n_bytes_as_uint(1),
@@ -362,7 +361,7 @@ impl<'a> Decoder<'a> {
 }
 
 pub struct Reader {
-    pub metadata: Metadata,
+    metadata: Metadata,
     buffer: Vec<u8>,
 }
 
@@ -518,7 +517,6 @@ mod tests {
     fn metadata_parsing() {
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
         assert_eq!(reader.metadata.node_count, 1431);
-        assert_eq!(reader.metadata.ip_version, 6);
         assert_eq!(reader.metadata.record_size, 28);
     }
 
