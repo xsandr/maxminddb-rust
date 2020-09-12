@@ -34,11 +34,12 @@ impl Metadata {
         let mut offset = 0;
 
         for (i, &item) in buffer.iter().rev().enumerate() {
-            if METADATA_DELIMETER[current_offset] != item {
-                current_offset = 13;
-            } else {
+            if METADATA_DELIMETER[current_offset] == item {
                 current_offset -= 1;
+            } else {
+                current_offset = 13;
             }
+
             if current_offset == 0 {
                 offset = buffer.len() - i - 2 + METADATA_DELIMETER.len();
                 break;
@@ -190,8 +191,8 @@ impl<'a> Decoder<'a> {
         fields: &Vec<&str>,
         result: &mut HashMap<String, ResultValue>,
     ) -> Option<()> {
-        // while decoding map, we store initial offset to be able start search
-        // from the beggining for every field
+        // while decoding map, we store initial offset of the map, to be able start search
+        // from scratch for every field
         let map_offset = self.offset;
         let mut has_found = None;
 
