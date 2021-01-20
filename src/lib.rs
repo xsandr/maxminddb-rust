@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -188,7 +189,7 @@ impl<'a> Decoder<'a> {
 
     fn decode_map_recursively(
         &mut self,
-        fields: &Vec<&str>,
+        fields: &[&str],
         result: &mut HashMap<String, ResultValue>,
     ) -> Option<()> {
         // while decoding map, we store initial offset of the map, to be able start search
@@ -283,7 +284,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    pub fn decode_map(&mut self, fields: &Vec<&str>) -> HashMap<String, u64> {
+    pub fn decode_map(&mut self, fields: &[&str]) -> HashMap<String, u64> {
         let mut result: HashMap<String, u64> = HashMap::with_capacity(fields.len());
 
         let (_, size) = self.decode_ctrl_byte();
@@ -416,14 +417,11 @@ impl Reader {
                 }
             };
 
-            if calculated_value == self.metadata.node_count {
-                // we didn't find the address for given IP address
-                break;
-            } else if calculated_value < self.metadata.node_count {
-                offset = calculated_value as usize * node_size_in_bytes;
-            } else {
-                return Some(calculated_value);
-            }
+            match calculated_value.cmp(&self.metadata.node_count) {
+                Ordering::Equal => break,
+                Ordering::Less => offset = calculated_value as usize * node_size_in_bytes,
+                _ => return Some(calculated_value),
+            };
         }
         None
     }
@@ -431,7 +429,7 @@ impl Reader {
     pub fn lookup(
         &self,
         ip: IpAddr,
-        fields: &Vec<&str>,
+        fields: &[&str],
         result: &mut HashMap<String, ResultValue>,
     ) -> Option<()> {
         let search_tree_size = (self.metadata.record_size / 4) * self.metadata.node_count + 16;
@@ -457,9 +455,8 @@ mod tests {
 
         let fields = vec!["city.names.en", "subdivisions.0.names.en"];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
-        if let None = reader.lookup(ip, &fields, &mut result) {
-            assert!(false);
-        };
+
+        assert!(reader.lookup(ip, &fields, &mut result).is_some());
 
         let v = &result["subdivisions.0.names.en"];
         if let ResultValue::String(value) = v {
@@ -478,14 +475,13 @@ mod tests {
         let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
         let fields = vec!["location.latitude", "location.longitude"];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
-        if let None = reader.lookup(ip, &fields, &mut result) {
-            assert!(false);
-        };
+        assert!(reader.lookup(ip, &fields, &mut result).is_some());
+
         if let ResultValue::Double(v) = result["location.latitude"] {
-            assert_eq!(v, 51.514200000000002);
+            assert_eq!(v, 51.514_2);
         }
         if let ResultValue::Double(v) = result["location.longitude"] {
-            assert_eq!(v, -0.093100000000000002);
+            assert_eq!(v, -0.093_1);
         }
     }
 
@@ -499,9 +495,7 @@ mod tests {
             "country.is_in_european_union",
         ];
         let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
-        if let None = reader.lookup(ip, &fields, &mut result) {
-            assert!(false);
-        };
+        assert!(reader.lookup(ip, &fields, &mut result).is_some());
 
         let v = &result["country.names.en"];
         if let ResultValue::String(value) = v {
