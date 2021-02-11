@@ -11,7 +11,7 @@ debug = true
 
 
 [dev-dependencies]
-criterion = "0.3"
+bencher = "0.1"
 
 [[bench]]
 name = "benchmark"
