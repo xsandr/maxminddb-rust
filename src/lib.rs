@@ -308,8 +308,10 @@ impl<'a> Decoder<'a> {
             }
             Type::Pointer => {
                 let pointer_offset = self.get_pointer_address();
-                let byte = &self.buffer[pointer_offset];
-                let size = match byte & 0x1F {
+                let previous_offset = self.offset;
+                self.offset = pointer_offset + 1;
+                let control_byte = &self.buffer[pointer_offset];
+                let size = match control_byte & 0x1F {
                     size if size < 29 => size as u64,
                     29 => 29 + self.decode_n_bytes_as_uint(1),
                     30 => 285 + self.decode_n_bytes_as_uint(2),
@@ -317,8 +319,8 @@ impl<'a> Decoder<'a> {
                     _ => panic!("unreachable"),
                 } as usize;
 
-                let left_bound = pointer_offset + 1;
-                let data = &self.buffer[left_bound..left_bound + size];
+                let data = &self.buffer[self.offset..self.offset + size];
+                self.offset = previous_offset;
                 let parsed = from_utf8(data);
                 parsed.expect("found invalid string")
             }
@@ -505,6 +507,20 @@ mod tests {
         let v = &result["city.names.en"];
         if let ResultValue::String(value) = v {
             assert_eq!(value, &String::from("London"));
+        }
+    }
+
+    #[test]
+    fn lookup_isp() {
+        let ip: IpAddr = "81.2.69.160".parse().unwrap();
+        let reader = Reader::open("test_data/test-data/GeoIP2-ISP-Test.mmdb").unwrap();
+        let fields = vec!["isp"];
+        let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
+        assert!(reader.lookup(ip, &fields, &mut result).is_some());
+
+        let v = &result["isp"];
+        if let ResultValue::String(value) = v {
+            assert_eq!(value, &String::from("Andrews & Arnold Ltd"));
         }
     }
 

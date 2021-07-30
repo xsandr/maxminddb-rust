@@ -10,11 +10,7 @@ use std::net::IpAddr;
 fn lookup_benchmark(b: &mut Bencher) {
     let ip: IpAddr = "81.2.69.160".parse().unwrap();
     let reader = Reader::open("test_data/test-data/GeoIP2-City-Test.mmdb").unwrap();
-    let fields: Vec<&str> = vec![
-        "city.names.en",
-        "country.names.en",
-        "country.is_in_european_union",
-    ];
+    let fields: Vec<&str> = vec!["country.iso_code", "country.names.en", "city.names.en"];
     let mut result: HashMap<String, ResultValue> = HashMap::with_capacity(fields.len());
 
     b.iter(|| reader.lookup(ip, &fields, &mut result))
